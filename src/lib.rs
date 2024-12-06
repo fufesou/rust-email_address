@@ -300,6 +300,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // ------------------------------------------------------------------------------------------------
 // Public Types
@@ -444,6 +445,9 @@ const LOCAL_PART_MAX_LENGTH: usize = 64;
 const DOMAIN_MAX_LENGTH: usize = 254;
 const SUB_DOMAIN_MAX_LENGTH: usize = 63;
 
+const LOCAL_PART_MAX_LENGTH_ENV_KEY: &str = "EMAIL_LOCAL_PART_MAX_LENGTH";
+static LOCAL_PART_MAX_LENGTH_CONF: AtomicUsize = AtomicUsize::new(0);
+
 #[allow(dead_code)]
 const CR: char = '\r';
 #[allow(dead_code)]
@@ -470,6 +474,18 @@ const MAILTO_URI_PREFIX: &str = "mailto:";
 
 // ------------------------------------------------------------------------------------------------
 
+#[inline]
+fn local_part_max_length() -> usize {
+    let mut length = LOCAL_PART_MAX_LENGTH_CONF.load(Ordering::SeqCst);
+    if length == 0 {
+        length = std::env::var(LOCAL_PART_MAX_LENGTH_ENV_KEY)
+            .map(|v| v.parse().unwrap_or(LOCAL_PART_MAX_LENGTH))
+            .unwrap_or(LOCAL_PART_MAX_LENGTH);
+        LOCAL_PART_MAX_LENGTH_CONF.store(length, Ordering::SeqCst);
+    }
+    length
+}
+
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -478,7 +494,7 @@ impl Display for Error {
             Error::LocalPartTooLong => write!(
                 f,
                 "Local part is too long. Length limit: {}",
-                LOCAL_PART_MAX_LENGTH
+                local_part_max_length()
             ),
             Error::DomainEmpty => write!(f, "Domain is empty."),
             Error::DomainTooLong => {
@@ -970,7 +986,7 @@ fn split_at(address: &str) -> Result<(&str, &str), Error> {
 fn parse_local_part(part: &str, _: Options) -> Result<(), Error> {
     if part.is_empty() {
         Error::LocalPartEmpty.into()
-    } else if part.len() > LOCAL_PART_MAX_LENGTH {
+    } else if part.len() > local_part_max_length() {
         Error::LocalPartTooLong.into()
     } else if part.starts_with(DQUOTE) && part.ends_with(DQUOTE) {
         // <= to handle `part` = `"` (single quote).
@@ -1951,5 +1967,10 @@ mod tests {
         assert!(!is_utf8_non_ascii('�'));
         assert!(!is_utf8_non_ascii('\u{0F40}'));
         assert!(is_utf8_non_ascii('\u{C2B0}'));
+    }
+
+    #[test]
+    fn test_local_part_length() {
+        assert_eq!(local_part_max_length(), LOCAL_PART_MAX_LENGTH);
     }
 }
